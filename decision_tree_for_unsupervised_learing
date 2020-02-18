@@ -1,0 +1,436 @@
+!pip install hdbscan
+import hdbscan
+from sklearn import datasets
+import pandas as pd
+import seaborn as sns
+import numpy as np
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.cluster import AgglomerativeClustering as Agglo
+from sklearn.cluster import KMeans
+from sklearn.cluster import DBSCAN
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import make_pipeline
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import confusion_matrix
+from scipy import stats
+from sklearn.decomposition import PCA
+from google.colab import drive
+import seaborn as sns
+from sklearn.manifold import TSNE
+from sklearn.metrics import davies_bouldin_score
+from sklearn.metrics import calinski_harabasz_score
+import altair as alt
+from scipy.stats import mode
+from sklearn.impute import SimpleImputer
+from sklearn.metrics import silhouette_score
+from sklearn.metrics import davies_bouldin_score
+from sklearn.metrics import calinski_harabasz_score
+from collections import Counter
+import matplotlib
+import matplotlib.pyplot as plt 
+import pandas as pd
+import random
+import pickle
+import xgboost as xgb
+from sklearn.metrics import accuracy_score
+from sklearn.tree import DecisionTreeClassifier
+
+random.seed(30)
+
+class Dataset():
+  def __init__(self, data, target):
+    self.data_original = data
+    self.data = data
+    self.clusters = {}
+    self.categoricals = []
+    self.numericals = []
+    self.drops = []
+    self.target = target
+    self.missing_list = [' ', '', 'NO DATA']
+    self.projection = ''
+    self.label_strings = ['label', 'target', 'target_class']
+  # TO DO: force object columns into string or float based on majority class.
+  def custom_clean(self, center=True, standardize=True, pca=True, drop_thresh=.75):
+    # ASSIGNING COLUMN TYPES
+    for column in self.data.columns:
+      n_unique_values = len(np.unique(self.data[column]))
+      if self.data[column].dtype == 'object':
+        self.data[column].replace(self.missing_list, np.nan, inplace=True)
+      try:
+        self.data[column] = self.data[column].astype('float64')
+      except ValueError:
+        pass
+      #print(column, np.unique(list(map(type,self.data[column])), return_counts=True))
+      if self.data[column].dtype in ['float64', 'int64', 'float32', 'int8']:
+        spread = self.data[column].max() - self.data[column].min() + 1
+        if n_unique_values < 50 and spread == n_unique_values:
+          self.categoricals.append(column)
+        elif np.mean(self.data[column].sort_values().diff()) == 1:
+          self.drops.append(column)
+        else:
+          self.numericals.append(column)
+      elif n_unique_values/len(self.data[column]) >= .75:
+        print(column, self.data[column].dtype)
+        self.drops.append(column)
+      else:
+        self.categoricals.append(column)
+    # PURGING AND FILLING MISSING DATA
+    self.data = self.data.drop(columns=self.drops)
+    self.data.dropna(axis=1, thresh=int((1-drop_thresh)*len(self.data)), inplace=True) #COLUMNS
+    self.data.dropna(axis=0, inplace=True) #ROWS
+    self.data.index = pd.RangeIndex(len(self.data.index))
+    for column in self.data.columns:
+      if column in self.categoricals:
+        self.data[column] = self.data[column].apply(lambda x: mode(self.data[column], nan_policy='omit') if x==np.nan else x)
+      else:
+        self.data[column] = self.data[column].apply(lambda x: np.nanmean(self.data[column]) if x==np.nan else x)
+    # ACTUAL PREPROCESSING
+    self.data_original_categories = self.data.drop(columns=[])
+    self.data = pd.get_dummies(self.data, columns=list(self.categoricals))
+    if center:
+      for each in self.numericals:
+        signs = np.sign(self.data[each])
+        self.data[each] = np.log(np.abs(self.data[each])+.1)
+        self.data[each] = self.data[each] * signs
+    if standardize:
+        scaler = StandardScaler()
+        self.data[self.data.columns] = scaler.fit_transform(self.data[self.data.columns])
+    if pca:
+      pca_model = PCA()
+      pca_model.fit(self.data[self.data.columns])
+      for n in range(len(pca_model.explained_variance_ratio_.cumsum())):
+        if pca_model.explained_variance_ratio_.cumsum()[n] > .8:
+          n_components = n
+      pca_new = PCA(n)
+      self.data = pca_new.fit_transform(self.data[self.data.columns])
+      self.data = pd.DataFrame(self.data)
+
+    print('numerical: ', self.numericals)
+    print('categorical: ', self.categoricals)
+    print('drop: ', self.drops)
+
+  def custom_cluster(self, kind='hdbscan', kmin=2, kmax=15):
+    if kind == 'hdbscan':
+      clusterer = hdbscan.HDBSCAN(metric='euclidean',
+                          allow_single_cluster=False,
+                          alpha=.5,
+                          min_cluster_size=15, #int(len(self.data)*.005),#int(np.log(len(self.data))*15),
+                          min_samples=int(np.log(len(self.data))),
+                          prediction_data=True,
+                          cluster_selection_method='leaf')
+      clusterer.fit(self.data)
+      self.clusters['hdbscan'] = [np.argmax(x) for x in hdbscan.all_points_membership_vectors(clusterer)] #clusterer.labels_
+
+    if kind == 'kmeans':
+      sil_scores = [] # https://medium.com/analytics-vidhya/how-to-determine-the-optimal-k-for-k-means-708505d204eb
+      labels_list = []
+      for k in range(kmin, kmax+1):
+        kmeans = KMeans(n_clusters = k).fit(self.data)
+        labels = kmeans.labels_
+        sil_scores.append(silhouette_score(self.data, labels, metric = 'euclidean'))
+        labels_list.append(labels)
+        # sil_scores indexes: 0 is k=2, 1 is k=3, etc.
+      ideal_k = sil_scores.index(max(sil_scores))
+      #print(sil_scores)
+      print('k=', ideal_k+kmin)
+      self.clusters['kmeans'] = labels_list[ideal_k]
+      del labels_list
+      del sil_scores
+
+    if kind == 'agglomerative':
+      sil_scores = [] # https://medium.com/analytics-vidhya/how-to-determine-the-optimal-k-for-k-means-708505d204eb
+      labels_list = []
+      for k in range(kmin, kmax+1):
+        agglo = Agglo(n_clusters=k).fit(self.data)
+        labels = agglo.labels_
+        sil_scores.append(silhouette_score(self.data, labels, metric = 'euclidean'))
+        labels_list.append(labels)
+        # sil_scores indexes: 0 is k=2, 1 is k=3, etc.
+      ideal_k = sil_scores.index(max(sil_scores))
+      #print(sil_scores)
+      print('k=', ideal_k+kmin)
+      self.clusters['agglomerative'] = labels_list[ideal_k]
+      del labels_list
+      del sil_scores
+
+  
+  def custom_tsne(self, kind='hdbscan', initialize=True):
+    if initialize:
+      self.projection = TSNE().fit_transform(self.data)
+    color_palette = sns.color_palette('bright', np.array(self.clusters[kind]).max()+1)
+    cluster_colors = [color_palette[x] if x >= 0
+                      else (0.8, 0.8, 0.8)
+                      for x in self.clusters[kind]]
+    plt.scatter(*self.projection.T, s=50, linewidth=0, c=cluster_colors, alpha=0.25)
+    matplotlib.pyplot.show()
+
+
+  def custom_initial_dist(self):
+    sns.set(style="whitegrid")
+    for category in self.categoricals:
+      g = sns.FacetGrid(self.data_original_categories, col=None)
+      ax = sns.countplot(x=category,data=self.data_original_categories)
+    
+    for numerical in self.numericals:
+      g = sns.FacetGrid(self.data_original_categories, col=None)
+      ax = sns.distplot(self.data_original_categories[numerical])
+
+  
+  def custom_clustered_dist(self, kind='hdbscan'):
+    sns.set(style="whitegrid")
+    for category in self.categoricals:
+      g = sns.FacetGrid(self.data_original_categories, col=None)
+      ax = sns.countplot(x=category,data=self.data_original_categories, hue=self.clusters[kind])
+    
+    for numerical in self.numericals:
+      g = sns.FacetGrid(self.data_original_categories, col=None)
+      for n in range(max(self.clusters[kind])+1):
+        sns.distplot(self.data_original_categories[self.clusters[kind]==n][numerical])
+  
+  def custom_cluster_evaluation(self, predicted): 
+    predicted = np.array(predicted)
+    predicted_index = np.argsort(predicted)
+    actual = np.array(self.target)
+    actual_index = np.argsort(actual)
+    labels = []
+    label = []
+    clusters = []
+    cluster = []
+
+    #seperates the clusters into seperate lists, then retrieves their index
+    for i in range(len(actual) - 1):
+      a = predicted[predicted_index[i]]
+      b = predicted[predicted_index[i + 1]]
+      if i == (len(predicted)- 2):
+        cluster.append(predicted_index[i])
+        cluster.append(predicted_index[i + 1])
+        a = 4
+        b = 3
+        clusters.append(cluster)
+      elif a == b:
+        cluster.append(predicted_index[i])
+      else:
+        cluster.append(predicted_index[i])
+        clusters.append(cluster)
+        cluster = []
+
+    #seperates the labels into seperate lists, then retrieves their index
+    for i in range(len(actual) - 1):
+      a = actual[actual_index[i]]
+      b = actual[actual_index[i + 1]]
+      if i == (len(actual)- 2):
+        label.append(actual_index[i])
+        label.append(actual_index[i + 1])
+        a = 4
+        b = 3
+        labels.append(label)
+      elif a == b:
+        label.append(actual_index[i])
+      else:
+        label.append(actual_index[i])
+        labels.append(label)
+        label = []
+
+    #gets the size of the labels
+    label_sizes = []
+    for x in range(len(list(labels))):
+      label_sizes.append(len(labels[x]))
+
+    #makes the evaluation metric
+    #find the predicted value of the the values that are in each cluster
+    for i in range(len(clusters)):
+      for x in range(len(clusters[i])):
+        index = clusters[i][x]
+        value = actual[index]
+        clusters[i][x] = value
+    
+    #evaluation metric = (max/predicted n)/((label n - predicted n + 1)
+    evaluations = []
+    for i in range(len(clusters)):
+      n = len(clusters[i])
+      sort_cluster = sorted(clusters[i])
+      
+      # returns a list of the count of the cluster and the values
+      cluster_group = list(Counter(sort_cluster).keys())
+      cluster_value = list(Counter(sort_cluster).values())
+
+      #runs through to find the dominate value of the cluster, and what value that cluster is
+      for x in range(len(cluster_value)):
+        max = cluster_value[0]
+        max_group = cluster_group[0]
+        others = 0
+        if max < cluster_value[x]:
+          others += max
+          max = cluster_value[x]
+          max_group = cluster_group[x]
+        else:
+          others += cluster_value[x]
+      print(n)
+      print(label_sizes[max_group])
+      difference = ((n - (label_sizes[max_group])) + 1)
+      if difference == 0:
+        difference = -1
+      print(max)
+      print(n)
+      cluster_evaluation = [((max/n)/difference), max_group]
+      evaluations.append(cluster_evaluation)
+
+    return evaluations 
+  
+  def custom_metrics(self):
+    for kind in self.clusters:
+      print(kind + " David-Bouldin: " + str(davies_bouldin_score(self.data, self.clusters[kind])) + " (Lower is better, 0 min)")
+      print(kind  + " Calinski-Harabasz: " + str(calinski_harabasz_score(self.data, self.clusters[kind])) + " (Higher is better)")
+      print(kind + " Silhouette: " + str(silhouette_score(self.data, self.clusters[kind])) + " (Higher is better)")
+      print(kind + " Alex Metric " + str(self.custom_cluster_evaluation(self.clusters[kind])) + "(Closer to zero is worse, scale is from -1 to 1), first number is for metric, second is for what raw data label it corresponds to")
+
+def custom_graph_cluster(data, x, y, cluster):
+  xs = data[x]
+  ys = data[y]
+  plot = plt.scatter(xs,ys, c = data[cluster])
+  matplotlib.pyplot.show()
+
+def custom_xgb(train_data, train_target, test_data):
+    X = train_data
+    Y = train_target
+    X_test = test_data
+    xg = xgb.XGBClassifier()
+    xg_class = xg.fit(X, Y)
+
+    y_pred = xg_class.predict(X_test)
+
+    return(y_pred)
+
+def custom_tree(train_data, train_target, test_data):
+    X = train_data
+    Y = train_target
+    X_test = test_data
+    clf = DecisionTreeClassifier()
+    clf = clf.fit(X,Y)
+
+    y_pred = clf.predict(X_test)
+
+    return(y_pred)
+
+iris = pd.read_csv('iris.csv')
+iris['variety'] = iris['variety'].map({'Setosa': 0, 'Versicolor': 1, 'Virginica': 2})
+variety = iris['variety']
+iris = iris.drop(['variety'],axis = 1)
+new_dataset = Dataset(iris,variety)
+new_dataset.custom_clean()
+clustering_kind = 'kmeans'
+new_dataset.custom_cluster(kind=clustering_kind, kmin=3, kmax=10)
+#new_dataset.cluster(kind='kmeans')
+new_dataset.custom_tsne(kind=clustering_kind, initialize=True)
+#new_dataset.initial_dist()
+kmeans_labels = new_dataset.clusters['kmeans']
+raw_labels = new_dataset.target
+iris['kmeans'] = kmeans
+iris['variety'] = variety
+print(pd.crosstab(raw_labels,kmeans_labels))
+new_dataset.custom_metrics()
+var = custom_graph_cluster(iris, 'sepal.length','sepal.width','variety')
+km = custom_graph_cluster(iris, 'sepal.length','sepal.width','kmeans')
+
+tree_iris = iris.drop(['kmeans','variety'],axis=1)
+tree_iris
+
+#train_test_split
+X_train, X_test, y_train, y_test = train_test_split(tree_iris, raw_labels, test_size=0.25, random_state=30)
+#raw data
+#tests decision tree with whole
+print(tree_iris)
+test_acc = custom_tree(tree_iris,raw_labels,tree_iris)
+print(test_acc)
+print(accuracy_score(raw_labels,test_acc))
+
+#tests xgb with whole
+test_acc = custom_xgb(tree_iris,raw_labels,tree_iris)
+print(test_acc)
+print(accuracy_score(raw_labels,test_acc))
+
+#tests decision tree with split
+print(tree_iris)
+test_acc = custom_tree(X_train,y_train,X_test)
+print(test_acc)
+print(accuracy_score(y_test,test_acc))
+
+#tests xgb with split
+test_acc = custom_xgb(X_train,y_train,X_test)
+print(test_acc)
+print(accuracy_score(y_test,test_acc))
+
+tree_iris['raw_labels'] = raw_labels
+custom_graph_cluster(tree_iris, 'sepal.length','sepal.width','raw_labels')
+
+tree_iris = tree_iris.drop('raw_labels',axis=1)
+
+#train_test_split
+X_train, X_test, y_train, y_test = train_test_split(tree_iris, kmeans_labels, test_size=0.25, random_state=30)
+
+#kmeans clusters
+#tests decision tree with whole
+print(tree_iris)
+test_acc = custom_tree(tree_iris,kmeans_labels,tree_iris)
+print(test_acc)
+print(accuracy_score(kmeans_labels,test_acc))
+
+#tests xgb with whole
+test_acc = custom_xgb(tree_iris,kmeans_labels,tree_iris)
+print(test_acc)
+print(accuracy_score(kmeans_labels,test_acc))
+
+#tests decision tree with split
+print(tree_iris)
+test_acc = custom_tree(X_train,y_train,X_test)
+print(test_acc)
+print(accuracy_score(y_test,test_acc))
+
+#tests xgb with split
+test_acc = custom_xgb(X_train,y_train,X_test)
+print(test_acc)
+print(accuracy_score(y_test,test_acc))
+
+tree_iris['kmeans_labels'] = kmeans_labels
+custom_graph_cluster(tree_iris, 'sepal.length','sepal.width','kmeans_labels')
+
+tree_iris = tree_iris.drop('kmeans_labels',axis=1)
+
+bad_labels = [1,2,2,0,1,0,1,1,2,1,1,1,0,0,0,1,1,1,2,2,1,1,1,1,1,1,1,2,0,2,1,1,1,1,1,1,1,
+ 1,2,0,1,1,1,0,1,1,1,1,1,1,2,1,2,0,1,1,2,0,2,0,0,2,0,2,0,1,1,1,1,0,2,0,0,0,
+ 2,1,2,2,0,0,1,0,1,0,0,2,2,0,0,1,0,2,0,0,0,1,0,2,0,0,2,0,2,1,2,2,0,1,0,2,2,
+ 2,2,1,1,2,2,1,2,0,2,0,2,0,2,1,1,1,1,1,2,2,2,2,0,2,2,2,2,1,1,2,0,2,2,1,0,2,
+ 2,1]
+
+#train_test_split
+X_train, X_test, y_train, y_test = train_test_split(tree_iris, bad_labels, test_size=0.25, random_state=30)
+
+#random clusters
+#tests decision tree with whole
+print(tree_iris)
+test_acc = custom_tree(tree_iris,bad_labels,tree_iris)
+print(test_acc)
+print(accuracy_score(bad_labels,test_acc))
+
+#tests xgb with whole
+test_acc = custom_xgb(tree_iris,bad_labels,tree_iris)
+print(test_acc)
+print(accuracy_score(bad_labels,test_acc))
+
+#tests decision tree with split
+print(tree_iris)
+test_acc = custom_tree(X_train,y_train,X_test)
+print(test_acc)
+print(accuracy_score(y_test,test_acc))
+
+#tests xgb with split
+test_acc = custom_xgb(X_train,y_train,X_test)
+print(test_acc)
+print(accuracy_score(y_test,test_acc))
+
+tree_iris['bad_labels'] = bad_labels
+custom_graph_cluster(tree_iris, 'sepal.length','sepal.width','bad_labels')
+
+tree_iris = tree_iris.drop('bad_labels',axis=1)

@@ -254,15 +254,15 @@ def cluster(data, original_data, k, r):
     centers_median = grouped_apps.median()
     stds = grouped_apps.std()
 
-    centers.to_csv('cluster_centers' + str(k) + str(r) + '.csv')
-    stds.to_csv('cluster_stds' + str(k) + str(r) + '.csv')
-    centers_median.to_csv('cluster_medians' + str(k) + str(r) + '.csv')
+    centers.to_csv('output/' + 'cluster_centers' + str(k) + str(r) + '.csv')
+    stds.to_csv('output/' + 'cluster_stds' + str(k) + str(r) + '.csv')
+    centers_median.to_csv('output/' + 'cluster_medians' + str(k) + str(r) + '.csv')
 
     pos_centers = grouped_apps.agg(lambda x: x[x > 0].mean())
     pos_centers_median = grouped_apps.agg(lambda x: x[x > 0].median())
 
     most_frequent_values = grouped_apps.agg(lambda x: x.value_counts().index[0])
-    most_frequent_values.to_csv('frequent_values' + str(k) + '.csv')
+    most_frequent_values.to_csv('output/' + 'frequent_values' + str(k) + '.csv')
 
     n_members_per_cluster = grouped_apps.count()
     print(n_members_per_cluster)
