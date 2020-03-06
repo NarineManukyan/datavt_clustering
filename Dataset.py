@@ -16,7 +16,6 @@ from sklearn.metrics import confusion_matrix
 from scipy import stats
 from sklearn.decomposition import PCA
 from google.colab import drive
-import seaborn as sns
 from sklearn.manifold import TSNE
 from sklearn.metrics import davies_bouldin_score
 from sklearn.metrics import calinski_harabasz_score
@@ -28,98 +27,11 @@ from sklearn.metrics import davies_bouldin_score
 from sklearn.metrics import calinski_harabasz_score
 from sklearn.experimental import enable_iterative_imputer 
 from sklearn.impute import IterativeImputer
+from sklearn.impute import KNNImputer
+from impyute.imputation.cs import mice
+from fancyimpute import IterativeImputer
 drive.mount('/content/gdrive')
 my_drive = '/content/gdrive/My Drive/'
-
-"""def cluster_evaluation(self, predicted): 
-    predicted = np.array(self.cluster[predicted])
-    predicted_index = np.argsort(predicted)
-    actual = np.array(self.data[data.target])
-    actual_index = np.argsort(actual)
-    labels = []
-    label = []
-    clusters = []
-    cluster = []
-
-    # seperates the clusters into seperate lists, then retrieves their index
-    for i in range(len(actual) - 1):
-      a = predicted[predicted_index[i]]
-      b = predicted[predicted_index[i + 1]]
-      if i == (len(predicted)- 2):
-        cluster.append(predicted_index[i])
-        cluster.append(predicted_index[i + 1])
-        a = 4
-        b = 3
-        clusters.append(cluster)
-      elif a == b:
-        cluster.append(predicted_index[i])
-      else:
-        cluster.append(predicted_index[i])
-        clusters.append(cluster)
-        cluster = []
-
-    # seperates the labels into seperate lists, then retrieves their index
-    for i in range(len(actual) - 1):
-      a = actual[actual_index[i]]
-      b = actual[actual_index[i + 1]]
-      if i == (len(actual)- 2):
-        label.append(actual_index[i])
-        label.append(actual_index[i + 1])
-        a = 4
-        b = 3
-        labels.append(label)
-      elif a == b:
-        label.append(actual_index[i])
-      else:
-        label.append(actual_index[i])
-        labels.append(label)
-        label = []
-
-    # gets the size of the labels
-    label_sizes = []
-    for x in range(len(list(labels))):
-      label_sizes.append(len(labels[x]))
-
-    # gets the size of the clusers
-    cluster_sizes = []
-    for x in range(len(list(clusters))):
-      cluster_sizes.append(len(clusters[x]))
-
-    # makes the evaluation metric
-    # find the predicted value of the the values that are in each cluster
-    for i in range(len(clusters)):
-      for x in range(len(clusters[i])):
-        index = clusters[i][x]
-        value = actual[index]
-        clusters[i][x] = value
-    
-    # evaluation metric = (max/predicted n)/((label n - predicted n + 1)
-    evaluations = []
-    for i in range(len(clusters)):
-      n = len(clusters[i])
-      sort_cluster = sorted(clusters[i])
-      
-      # returns a list of the count of the cluster and the values
-      cluster_group = list(Counter(sort_cluster).keys())
-      cluster_value = list(Counter(sort_cluster).values())
-
-      #runs through to find the dominate value of the cluster, and what value that cluster is
-      for x in range(len(cluster_value)):
-        max = cluster_value[0]
-        max_group = cluster_group[0]
-        others = 0
-        if max < cluster_value[x]:
-          others += max
-          max = cluster_value[x]
-          max_group = cluster_group[x]
-        else:
-          others += cluster_value[x]
-      difference = (n - (label_sizes[max_group]) + 1)
-      cluster_evaluation = [((max/n)/difference), max_group]
-      evaluations.append(cluster_evaluation)
-    return evaluations
-"""
-
 
 class Dataset():
     def __init__(self, data, target=''):
@@ -201,8 +113,13 @@ class Dataset():
             scaler = StandardScaler()
             self.data[self.data.columns] = scaler.fit_transform(self.data[self.data.columns])
         if iter_impute:
-            imp_mean = IterativeImputer(random_state=0)
-            print(imp_mean.fit_transform(self.data))
+            print('Doing imputation!')
+            imp_mean = IterativeImputer(verbose=2)
+            self.imp = imp_mean.fit_transform(self.data)
+            #self.imputed_training=mice(self.data)
+            #self.imputed = self.data.drop(columns=[])
+            #mice_imputer = IterativeImputer()
+            #self.imputed.iloc[:, :] = mice_imputer.fit_transform(self.imputed)
         if pca:
             pca_model = PCA()
             pca_model.fit(self.data[self.data.columns])
@@ -212,7 +129,7 @@ class Dataset():
             pca_new = PCA(n)
             self.data = pca_new.fit_transform(self.data[self.data.columns])
             self.data = pd.DataFrame(self.data)
-
+        
         print('numerical: ', self.numericals)
         print('categorical: ', self.categoricals)
         print('drop: ', self.drops)
@@ -220,33 +137,33 @@ class Dataset():
     def cluster(self, kind='hdbscan', kmin=2, kmax=15):
         if kind == 'hdbscan':
             clusterer = hdbscan.HDBSCAN(metric='euclidean',
-                                        allow_single_cluster=False,
-                                        alpha=.5,
-                                        min_cluster_size=15,  # int(len(self.data)*.005)&int(np.log(len(self.data))*15),
-                                        min_samples=int(np.log(len(self.data))),
-                                        prediction_data=True,
-                                        cluster_selection_method='leaf')
+                                allow_single_cluster=False,
+                                alpha=.5,
+                                min_cluster_size=15, #int(len(self.data)*.005),#int(np.log(len(self.data))*15),
+                                min_samples=int(np.log(len(self.data))),
+                                prediction_data=True,
+                                cluster_selection_method='leaf')
             clusterer.fit(self.data)
             self.clusters['hdbscan'] = [np.argmax(x) for x in hdbscan.all_points_membership_vectors(clusterer)] #clusterer.labels_
 
         if kind == 'kmeans':
-            sil_scores = [] # medium.com/analytics-vidhya/how-to-determine-the-optimal-k-for-k-means-708505d204eb
+            sil_scores = [] # https://medium.com/analytics-vidhya/how-to-determine-the-optimal-k-for-k-means-708505d204eb
             labels_list = []
             for k in range(kmin, kmax+1):
-                kmeans = KMeans(n_clusters=k).fit(self.data)
+                kmeans = KMeans(n_clusters = k).fit(self.data)
                 labels = kmeans.labels_
-                sil_scores.append(silhouette_score(self.data, labels, metric='euclidean'))
+                sil_scores.append(silhouette_score(self.data, labels, metric = 'euclidean'))
                 labels_list.append(labels)
                 # sil_scores indexes: 0 is k=2, 1 is k=3, etc.
             ideal_k = sil_scores.index(max(sil_scores))
-            # print(sil_scores)
+            #print(sil_scores)
             print('k=', ideal_k+kmin)
             self.clusters['kmeans'] = labels_list[ideal_k]
             del labels_list
             del sil_scores
 
         if kind == 'agglomerative':
-            sil_scores = []
+            sil_scores = [] # https://medium.com/analytics-vidhya/how-to-determine-the-optimal-k-for-k-means-708505d204eb
             labels_list = []
             for k in range(kmin, kmax+1):
                 agglo = Agglo(n_clusters=k).fit(self.data)
@@ -255,7 +172,7 @@ class Dataset():
                 labels_list.append(labels)
                 # sil_scores indexes: 0 is k=2, 1 is k=3, etc.
             ideal_k = sil_scores.index(max(sil_scores))
-            # print(sil_scores)
+            #print(sil_scores)
             print('k=', ideal_k+kmin)
             self.clusters['agglomerative'] = labels_list[ideal_k]
             del labels_list
@@ -279,7 +196,7 @@ class Dataset():
         for numerical in self.numericals:
             g = sns.FacetGrid(self.data_original_categories, col=None)
             ax = sns.distplot(self.data_original_categories[numerical])
-
+    
     def clustered_dist(self, kind='hdbscan'):
         sns.set(style="whitegrid")
         for category in self.categoricals:
@@ -290,14 +207,12 @@ class Dataset():
             g = sns.FacetGrid(self.data_original_categories, col=None)
         for n in range(max(self.clusters[kind])+1):
             sns.distplot(self.data_original_categories[self.clusters[kind]==n][numerical])
-
+    
     def metrics(self):
         for kind in self.clusters:
             print(kind + " David-Bouldin: " + str(davies_bouldin_score(self.data, self.clusters[kind])) + " (Lower is better, 0 min)")
             print(kind  + " Calinski-Harabasz: " + str(calinski_harabasz_score(self.data, self.clusters[kind])) + " (Higher is better)")
             print(kind + " Silhouette: " + str(silhouette_score(self.data, self.clusters[kind])) + " (Higher is better)")
-            print(kind + " Alex Metric " + str(cluster_evaluation(self.clusters[kind])) + "(Higher is worse, 0 - 1)")
-
 
 fara = pd.read_csv(my_drive + 'features.csv')
 feature_dict = pd.read_csv(my_drive + 'faraday_dictionary.csv')
@@ -315,29 +230,47 @@ for each in not_in_our_data:
     feature_dict = feature_dict[feature_dict.columns][feature_dict['Code']!=each]
 
 new_dataset = Dataset(fara)
+also_drop = ['child_1_birthdate',
+            'child_2_birthdate', 'child_4_birthdate', 'home_equity_loan_date', 
+            'household_verification_date',
+            'last_sale_date', 'latest_mortgage_date', 'mortgage_due_date',
+            'second_mortgage_due_date', 'third_mortgage_due_date',
+            'trigger_change_date_credit_card', 'trigger_change_date_home_market_value',
+            'trigger_change_date_income', 'trigger_date_empty_nester',
+            'trigger_date_new_adult_to_file', 'trigger_date_new_child',
+            'trigger_date_newly_married', 'trigger_date_newly_single',
+            'trigger_date_value_score', 'trigger_niche_date', 'verification_date', 
+            'versium_updated',
+            'pool_type', 'fireplace_type', 'location_associated_aspects', 
+            'trigger_niche_current', 'owner_type', 'heating_system_type',
+            'cl_nearest_airport', 'garage_type', 'roof_type', 'vehicle_make',
+            'architecture_type', 'style', 'parking_type', 'exterior_walls_type',
+            'ds_niches_40', 'vehicle_model', 'title_company', 'post_office_name',
+            'city', 'third_mortgage_lender_name', 'zoning_type', 'company_name',
+            'second_mortgage_lender_name', 'postcode', 'mortgage_lender_name',
+            'census_block_group', 'postcode_zip4'
+            ]
+            
 numericals = list(feature_dict['Code'][feature_dict['Type']=='numeric'])
 booleans = list(feature_dict['Code'][feature_dict['Type']=='boolean'])
 categoricals = list(feature_dict['Code'][feature_dict['Type']=='categorical'])
 dates = list(feature_dict['Code'][feature_dict['Type']=='date'])
 locations = list(feature_dict['Code'][feature_dict['Type']=='location'])
-drops = dates + locations + ['id']
 
+for item in also_drop:
+    if item in numericals:
+        numericals.remove(item)
+    if item in booleans:
+        booleans.remove(item)
+    if item in categoricals:
+        categoricals.remove(item)
+drops = dates + locations + ['id'] + also_drop
 fara[booleans] = fara[booleans].fillna(False)
 
 new_dataset.assign_categories(categoricals, numericals, drops)
-
 new_dataset.clean(find_categories=False, center=True, standardize=True, pca=False, iter_impute=True, drop_thresh=0)
 
-"""yes = pd.read_csv(my_drive + 'features.csv')
-new_dataset = Dataset(yes)
-new_dataset.clean()
-clustering_kind = 'hdbscan'
-new_dataset.cluster(kind=clustering_kind, kmin=2, kmax=10)
-#new_dataset.cluster(kind='kmeans')
-new_dataset.tsne(kind=clustering_kind, initialize=True)
-#new_dataset.initial_dist()
-#new_dataset.metrics()
-"""
-
-# new_dataset.metrics()
+new_dataset.data = new_dataset.imp
+new_dataset.cluster()
+new_dataset.tsne()
 
